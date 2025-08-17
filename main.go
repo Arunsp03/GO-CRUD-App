@@ -49,7 +49,18 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	_, err = db.Exec(`
+CREATE TABLE IF NOT EXISTS users (
+    userName TEXT PRIMARY KEY,
+    password TEXT
+)
+`)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	taskDb := TaskDb{db: db}
+	userDb := UserDB{db: db}
 
 	router.Get("/", func(w http.ResponseWriter, r *http.Request) {
 
@@ -109,6 +120,44 @@ func main() {
 			"message": "Successfully deleted",
 			"taskId":  taskId,
 		})
+
+	})
+
+	router.Post("/registeruser", func(w http.ResponseWriter, r *http.Request) {
+		var user User
+		err := json.NewDecoder(r.Body).Decode(&user)
+
+		if err != nil {
+			respondWithError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		err = userDb.RegisterUser(user.UserName, user.Password)
+		if err != nil {
+			respondWithError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		respondWithJSON(w, http.StatusOK, "Successfullly registered user")
+
+	})
+
+	router.Post("/login", func(w http.ResponseWriter, r *http.Request) {
+		var user User
+		err := json.NewDecoder(r.Body).Decode(&user)
+		if err != nil {
+			respondWithError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		isValidUser, err := userDb.ValidateLogin(user.UserName, user.Password)
+		if err != nil {
+			respondWithError(w, http.StatusUnauthorized, err.Error())
+			return
+		}
+		if isValidUser {
+			respondWithJSON(w, http.StatusOK, "Successfully logged in")
+			return
+		}
+
+		respondWithJSON(w, http.StatusUnauthorized, "Login failed . Wrong password")
 
 	})
 
