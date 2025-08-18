@@ -33,6 +33,7 @@ func main() {
 	fmt.Printf("Server is running on Port %v", port)
 
 	db, err := sql.Open("sqlite", "./tasks.db")
+	db.SetMaxOpenConns(1)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -41,6 +42,7 @@ func main() {
 	// Create table if not exists
 	_, err = db.Exec(`
 	CREATE TABLE IF NOT EXISTS tasks (
+		owner TEXT,
 		taskId TEXT PRIMARY KEY,
 		taskName TEXT,
 		createdDate TEXT DEFAULT (datetime('now'))
@@ -62,65 +64,74 @@ CREATE TABLE IF NOT EXISTS users (
 	taskDb := TaskDb{db: db}
 	userDb := UserDB{db: db}
 
+	router.Route("/api/tasks", func(r chi.Router) {
+		r.Use(AuthMiddleWare)
+
+		r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+			username := r.Context().Value("username").(string)
+
+			tasksData, err := taskDb.GetTasks(username)
+			if err != nil {
+				respondWithError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			respondWithJSON(w, http.StatusOK, tasksData)
+		})
+
+		r.Post("/addtask", func(w http.ResponseWriter, r *http.Request) {
+			username := r.Context().Value("username").(string)
+			var newTask Task
+			err := json.NewDecoder(r.Body).Decode(&newTask)
+			if err != nil {
+				respondWithError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			err = taskDb.AddTask(newTask, username)
+			if err != nil {
+				respondWithError(w, http.StatusInternalServerError, err.Error())
+			}
+
+			respondWithJSON(w, http.StatusOK, newTask)
+		})
+
+		r.Put("/edittask", func(w http.ResponseWriter, r *http.Request) {
+			username := r.Context().Value("username").(string)
+			var task Task
+			err := json.NewDecoder(r.Body).Decode(&task)
+			if err != nil {
+				respondWithError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			err = taskDb.EditTask(task, username)
+			if err != nil {
+				respondWithError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+
+			respondWithJSON(w, http.StatusOK, task)
+		})
+
+		r.Delete("/deletetask/{taskId}", func(w http.ResponseWriter, r *http.Request) {
+			username := r.Context().Value("username").(string)
+			var taskId string
+			taskId = chi.URLParam(r, "taskId")
+			err := taskDb.DeleteTask(taskId, username)
+			if err != nil {
+				respondWithError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			respondWithJSON(w, http.StatusOK, map[string]string{
+				"message": "Successfully deleted",
+				"taskId":  taskId,
+			})
+
+		})
+
+	})
+
 	router.Get("/", func(w http.ResponseWriter, r *http.Request) {
 
 		respondWithJSON(w, http.StatusOK, "Hello world")
-	})
-
-	router.Get("/tasks", func(w http.ResponseWriter, r *http.Request) {
-
-		tasksData, err := taskDb.GetTasks()
-		if err != nil {
-			respondWithError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		respondWithJSON(w, http.StatusOK, tasksData)
-	})
-
-	router.Post("/addtask", func(w http.ResponseWriter, r *http.Request) {
-		var newTask Task
-		err := json.NewDecoder(r.Body).Decode(&newTask)
-		if err != nil {
-			respondWithError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		err = taskDb.AddTask(newTask)
-		if err != nil {
-			respondWithError(w, http.StatusInternalServerError, err.Error())
-		}
-
-		respondWithJSON(w, http.StatusOK, newTask)
-	})
-
-	router.Put("/edittask", func(w http.ResponseWriter, r *http.Request) {
-		var task Task
-		err := json.NewDecoder(r.Body).Decode(&task)
-		if err != nil {
-			respondWithError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		err = taskDb.EditTask(task)
-		if err != nil {
-			respondWithError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-
-		respondWithJSON(w, http.StatusOK, task)
-	})
-
-	router.Delete("/deletetask/{taskId}", func(w http.ResponseWriter, r *http.Request) {
-		var taskId string
-		taskId = chi.URLParam(r, "taskId")
-		err := taskDb.DeleteTask(taskId)
-		if err != nil {
-			respondWithError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		respondWithJSON(w, http.StatusOK, map[string]string{
-			"message": "Successfully deleted",
-			"taskId":  taskId,
-		})
-
 	})
 
 	router.Post("/registeruser", func(w http.ResponseWriter, r *http.Request) {
@@ -153,7 +164,13 @@ CREATE TABLE IF NOT EXISTS users (
 			return
 		}
 		if isValidUser {
-			respondWithJSON(w, http.StatusOK, "Successfully logged in")
+			tokenString, err := CreateToken(user.UserName)
+			if err != nil {
+				respondWithError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+
+			respondWithJSON(w, http.StatusOK, map[string]string{"message": "Successfully logged in", "token": tokenString})
 			return
 		}
 
